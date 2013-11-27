@@ -8,6 +8,7 @@ import re
 
 __all__ = ("Rcmd",)
 
+__version__ = "1.0.1"
 PROMPT = "(Rcmd) "
 PY2 = sys.version_info[0] == 2
 
@@ -67,18 +68,20 @@ class Rcmd(object):
         # Register our handy decorator registrars.
         self.emptyline = self.registrar("_emptyline")
         self.default = self.registrar("_default")
-        self.bang = self.register_parenless(r"!")
+        self.bang = self.register_parenless(r"!$")
+        self.question = self.register_parenless(r"\?$")
         self.precmd = self.registrar("_precmd")
         self.postcmd = self.registrar("_postcmd")
         self.preloop = self.registrar("_preloop")
         self.postloop = self.registrar("_postloop")
         # Setup our defaults where required.
         self.bang(noop)
+        self.question(noop)
         def _default(line):
             self.stdout.write("*** Unknown syntax: {0}\n".format(line))
         self.default(_default)
         self.precmd(lambda line: line)
-        self.postcmd(lambda stop, results, line: stop)
+        self.postcmd(lambda stop, results, line: stop, results)
 
     def register_parenless(self, regex):
         """ Allows registration of 'simple' handlers - e.g.
@@ -171,7 +174,7 @@ class Rcmd(object):
                     line = line.rstrip("\r\n")
             line = self._precmd(line)
             stop, results = self.onecmd(line)
-            stop = self._postcmd(stop, results, line)
+            stop, results = self._postcmd(stop, results, line)
         self._postloop()
 
     def parseline(self, line):
