@@ -9,7 +9,7 @@ import re
 
 __all__ = ("Rcmd",)
 
-__version__ = "1.0.2"
+__version__ = "1.0.3"
 PROMPT = "(Rcmd) "
 PY2 = sys.version_info[0] == 2
 
