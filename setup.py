@@ -1,4 +1,5 @@
-from setuptools import setup
+# -*- coding: utf-8 -*-
+from distutils.core import setup
 
 
 def long_desc():
@@ -7,9 +8,9 @@ def long_desc():
 
 kw = {
     "name": "rcmd",
-    "version": "1.0.1",
+    "version": "1.0.2",
     "description": "Like Python's cmd module, but uses regex based handlers instead!",
-    "long_description": long_desc(),
+    "long_description": "Does things!",  # long_desc() is pain in Py3k.
     "url": "https://github.com/plausibility/rcmd.py",
     "author": "plausibility",
     "author_email": "chris@gibsonsec.org",

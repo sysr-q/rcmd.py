@@ -74,3 +74,47 @@ def postloop():
     # Called after the command loop finishes.
     pass
 ```
+
+## Example `help` command
+
+This isn't built in because to each his own - you might want different things to me, so here's a basic structure you can work with.  
+This will let people do `help` and `help thing` (with optional `?` alias to help), and prints the `__doc__` of each command handler that _thing_ matches.
+
+```python
+@r.question
+@r.command(r"help$")
+def help(args):
+    def tidy_regex(regex):
+        return regex.lstrip("^").rstrip("$")
+
+    def create_help(regex, functions, matching=None):
+        if matching is not None and not regex.match(matching):
+            return None
+        out = [">>> {0}".format(tidy_regex(regex.pattern))]
+        for i, function in enumerate(functions, 1):
+            if function.__doc__:
+                out.append(textwrap.dedent(function.__doc__))
+            else:
+                out.append("{0}. No help provided. :( ({1})".format(i, function.__name__))
+            out.append("")
+        return "\n".join(out)
+
+    # No arguments provided, just list things.
+    if not args or len(args) != 1:
+        for regex, functions in r.handlers.iteritems():
+            print(create_help(regex, functions))
+        return
+
+    # Do a search for matching handlers.
+    cmd, matched = args[0], True
+    print('"{0}" would run:\n'.format(cmd))
+    for regex, functions in r.handlers.iteritems():
+        t = create_help(regex, functions, matching=cmd)
+        if t is None:
+            continue
+        matched = True
+        print(t)
+
+    if not matched:
+        print("nothing :(\n")
+```

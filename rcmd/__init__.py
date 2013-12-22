@@ -2,13 +2,14 @@
 from __future__ import print_function
 import collections
 import functools
+import inspect
 import string
 import sys
 import re
 
 __all__ = ("Rcmd",)
 
-__version__ = "1.0.1"
+__version__ = "1.0.2"
 PROMPT = "(Rcmd) "
 PY2 = sys.version_info[0] == 2
 
@@ -39,10 +40,10 @@ def noop(*args, **kwargs):
     pass
 
 class Rcmd(object):
-    handlers = OrderedDefaultDict(list)
     def __init__(self, module=None, prompt=None, stdin=None, stdout=None):
         """ TODO: document.
         """
+        self.handlers = OrderedDefaultDict(list)
         self.module = module
         if prompt is not None:
             self.prompt = prompt
@@ -61,6 +62,7 @@ class Rcmd(object):
         else:
             self.inputter = input
         # Junk we need in our loop.
+        self._eof = "\x00\x00"  # any hard to enter string
         self.use_rawinput = True
         self.intro = None
         self.lastcmd = ""
@@ -81,7 +83,9 @@ class Rcmd(object):
             self.stdout.write("*** Unknown syntax: {0}\n".format(line))
         self.default(_default)
         self.precmd(lambda line: line)
-        self.postcmd(lambda stop, results, line: stop, results)
+        def _postcmd(stop, results, line):
+            return stop, results
+        self.postcmd(_postcmd)
 
     def register_parenless(self, regex):
         """ Allows registration of 'simple' handlers - e.g.
@@ -125,7 +129,7 @@ class Rcmd(object):
             prepended to it to ensure it only matches the start of
             a command.
             NB: If `override` isn't set, you can have *multiple* handlers
-            for a single order - they'll be called in order of registration.
+            for a single regex - they'll be called in order of registration.
             NB: If `with_line` is set, your function will be called: f(args, cmd)
         """
         if not direct and len(regex) > 0 and regex[0] != "^":
@@ -138,6 +142,9 @@ class Rcmd(object):
                 self.handlers[reg].append(f)
             if f != noop:
                 f.regex = reg
+            # If this function has a suspiciously low amount of arguments,
+            # we won't bother passing in args to it at calling.
+            f.no_args = len(inspect.getargspec(f).args) == 0
             f.with_cmd = with_cmd
             return f
         return outer
@@ -163,13 +170,13 @@ class Rcmd(object):
                 try:
                     line = self.inputter(self.prompt)
                 except EOFError:
-                    line = "EOF"
+                    line = self._eof
             else:
                 self.stdout.write(self.prompt)
                 self.stdout.flush()
                 line = self.stdin.readline()
                 if not len(line):
-                    line = "EOF"
+                    line = self._eof
                 else:
                     line = line.rstrip("\r\n")
             line = self._precmd(line)
@@ -187,7 +194,7 @@ class Rcmd(object):
         line = line.strip()
         if not line:
             return None, None, line
-        split = line.strip().split()
+        split = line.split()
         cmd, args = split[0], split[1:]
         return cmd, args, line
 
@@ -203,7 +210,7 @@ class Rcmd(object):
         if cmd is None:
             return self._default(line), None
         self.lastcmd = line
-        if line == "EOF":
+        if line == self._eof:
             self.lastcmd = ""
             return True, None
         if cmd == "":
@@ -216,7 +223,9 @@ class Rcmd(object):
         if matches:
             results = []
             for func in matches:
-                if func.with_cmd:
+                if func.no_args:
+                    results.append(func())
+                elif func.with_cmd:
                     results.append(func(args, cmd))
                 else:
                     results.append(func(args))
