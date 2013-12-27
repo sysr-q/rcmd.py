@@ -7,11 +7,14 @@ import string
 import sys
 import re
 
+import rcmd.parser
+
 __all__ = ("Rcmd",)
 
-__version__ = "1.0.3"
+__version__ = "1.1.0"
 PROMPT = "(Rcmd) "
 PY2 = sys.version_info[0] == 2
+DEFAULT_PARSER = rcmd.parser.Regex
 
 class OrderedDefaultDict(collections.OrderedDict):
     def __init__(self, *args, **kwargs):
@@ -34,16 +37,15 @@ class OrderedDefaultDict(collections.OrderedDict):
         args = (self.default_factory,) if self.default_factory else tuple()
         return self.__class__, args, None, None, self.iteritems()
 
-def noop(*args, **kwargs):
-    """ THIS METHOD INTENTIONALLY LEFT BLANK.
-    """
-    pass
 
 class Rcmd(object):
-    def __init__(self, module=None, prompt=None, stdin=None, stdout=None):
+    def __init__(self, module=None, prompt=None, parser=None, stdin=None, stdout=None):
         """ TODO: document.
         """
-        self.handlers = OrderedDefaultDict(list)
+        if parser is None:
+            self.parser = DEFAULT_PARSER()
+        else:
+            self.parser = parser
         self.module = module
         if prompt is not None:
             self.prompt = prompt
@@ -67,98 +69,35 @@ class Rcmd(object):
         self.intro = None
         self.lastcmd = ""
         self.identchars = string.ascii_letters + string.digits + "_"
-        # Register our handy decorator registrars.
-        self.emptyline = self.registrar("_emptyline")
-        self.default = self.registrar("_default")
-        self.bang = self.register_parenless(r"!$")
-        self.question = self.register_parenless(r"\?$")
-        self.precmd = self.registrar("_precmd")
-        self.postcmd = self.registrar("_postcmd")
-        self.preloop = self.registrar("_preloop")
-        self.postloop = self.registrar("_postloop")
-        # Setup our defaults where required.
-        self.bang(noop)
-        self.question(noop)
+        # Register decorators and whatnot.
+        self.command = self.parser.command
+        self.unregister = self.parser.unregister
+        self.events = OrderedDefaultDict(list)
+        events = ["emptyline", "default", #"bang", "question",
+                  "precmd", "postcmd", "preloop", "postloop"]
+        for event in events:
+            self.easy_handler(event)(rcmd.parser.noop)
         def _default(line):
             self.stdout.write("*** Unknown syntax: {0}\n".format(line))
+            self.stdout.flush()
         self.default(_default)
-        self.precmd(lambda line: line)
-        def _postcmd(stop, results, line):
-            return stop, results
-        self.postcmd(_postcmd)
+        self.precmd(lambda line: line.strip())
+        self.postcmd(lambda stop, results, line: (stop, results))
 
-    def register_parenless(self, regex):
-        """ Allows registration of 'simple' handlers - e.g.
-            `@r.emptyline`, which can be used to register a handler
-            without having to use parenthesis.
-
-            Simply a thin wrapper around `r.command`.
-        """
-        def outer(f):
-            return self.command(regex)(f)
-        return outer
-
-    def registrar(self, handler):
-        """ TODO: document.
-
-            Differs from @r.command in that it's just a simple decorator,
-            no regexes are involved - it just places the registered func
-            on the instance.
-
-            Lets you do stuff like this:
-            >>> r.precmd = r.registrar("_precmd")
-            # ... some time later ...
-            >>> @r.precmd
-            ... def precmd(*a, **k):
-            ...    pass
-            >>> r._precmd()
-        """
-        if not hasattr(self, handler):
-            setattr(self, handler, noop)
-        def outer(f):
-            setattr(self, handler, f)
+    def easy_handler(self, event):
+        def handler(f):
+            self.events[event] = [f]
             return f
-        return outer
-
-    def command(self, regex, direct=False, override=True, with_cmd=False):
-        """ Registers a command handler by appending the registered
-            function and regex to `r.handlers`, and also placing the
-            (compiled) regex as an attribute on the registered function.
-
-            NB: If `direct` is not set, the regex will have a caret
-            prepended to it to ensure it only matches the start of
-            a command.
-            NB: If `override` isn't set, you can have *multiple* handlers
-            for a single regex - they'll be called in order of registration.
-            NB: If `with_line` is set, your function will be called: f(args, cmd)
-        """
-        if not direct and len(regex) > 0 and regex[0] != "^":
-            regex = "^{0}".format(regex)
-        def outer(f):
-            reg = re.compile(regex)
-            if override:
-                self.handlers[reg] = [f]
-            else:
-                self.handlers[reg].append(f)
-            if f != noop:
-                f.regex = reg
-            # If this function has a suspiciously low amount of arguments,
-            # we won't bother passing in args to it at calling.
-            f.no_args = len(inspect.getargspec(f).args) == 0
-            f.with_cmd = with_cmd
-            return f
-        return outer
-
-    def unregister(self, regex, direct=False):
-        if not direct and len(regex) > 0 and regex[0] != "^":
-            regex = "^{0}".format(regex)
-        return self.handlers.pop(regex, None) is not None
+        # Where the magic happens.
+        setattr(self, event, handler)
+        return handler
 
     def loop(self, intro=None):
         """ TODO as heck.
-            See: cmd.Cmd.cmdloop for some (somewhat horrifying) example loops.
+            See Python's cmd.Cmd.cmdloop for some (somewhat horrifying)
+            example loops - that's what we're working similarly to.
         """
-        self._preloop()
+        self.fire("preloop")
         if intro is not None:
             self.intro = intro
         if self.intro is not None:
@@ -179,55 +118,47 @@ class Rcmd(object):
                     line = self._eof
                 else:
                     line = line.rstrip("\r\n")
-            line = self._precmd(line)
+            line = self.fire("precmd", line)
             stop, results = self.onecmd(line)
-            stop, results = self._postcmd(stop, results, line)
-        self._postloop()
+            stop, results = self.fire("postcmd", stop, results, line)
+        self.fire("postloop")
 
-    def parseline(self, line):
-        """ Parse the line into the command name and a list of the remaining
-            arguments (rest.split()). Returns a tuple (cmd, args, line)
-            `cmd` and `args` may be None if the line couldn't be parsed.
+    def event(self, name):
+        def handler(f):
+            self.events[name].append(f)
+            f._handling = name
+            return f
+        return handler
 
-            Modeled off of Python's `cmd.Cmd.parseline`.
-        """
-        line = line.strip()
-        if not line:
-            return None, None, line
-        split = line.split()
-        cmd, args = split[0], split[1:]
-        return cmd, args, line
+    def unevent(self, f):
+        if not hasattr(f, "_handling") or not f in self.events[f._handling]:
+            return False
+        del self.events[f._handling][f]
+        return True
+
+    def fire(self, name, *args, **kwargs):
+        if len(self.events[name]) == 1:
+            return self.events[name][0](*args, **kwargs)
+        for event in self.events[name]:
+            event(*args, **kwargs)
 
     def onecmd(self, line):
-        """ TODO: clean up and document this behemoth.
-
-            Returns a tuple of (stop, results) - results may be None
-            if no function handlers matched the command.
-        """
-        cmd, args, line = self.parseline(line)
         if not line:
-            return self._emptyline(), None
-        if cmd is None:
-            return self._default(line), None
-        self.lastcmd = line
+            return self.fire("emptyline"), None
         if line == self._eof:
-            self.lastcmd = ""
             return True, None
-        if cmd == "":
-            return self._default(line), None
-        matches = None
-        for regex, funcs in self.handlers.items():
-            if not regex.findall(cmd):
-                continue
-            matches = funcs
-        if matches:
-            results = []
-            for func in matches:
-                if func.no_args:
-                    results.append(func())
-                elif func.with_cmd:
-                    results.append(func(args, cmd))
+        self.lastcmd = line
+        matches, args, kwargs = self.parser.best_guess(line)
+        if len(matches) == 0:
+            return self.fire("default", line), None
+        kwargs.setdefault("line", line)
+        results = []
+        for handlers in matches:
+            for function in handlers:
+                if function.no_args:
+                    results.append(function())
+                elif function.options["inject"]:
+                    results.append(function(*args, **kwargs))
                 else:
-                    results.append(func(args))
-            return any(results), results
-        return self._default(line), None
+                    results.append(function(args))
+        return any(results), results
