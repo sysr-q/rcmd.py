@@ -11,7 +11,7 @@ import rcmd.parser
 
 __all__ = ("Rcmd",)
 
-__version__ = "1.1.0"
+__version__ = "1.1.1"
 PROMPT = "(Rcmd) "
 PY2 = sys.version_info[0] == 2
 DEFAULT_PARSER = rcmd.parser.Regex

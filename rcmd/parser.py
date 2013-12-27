@@ -11,6 +11,10 @@ class Parser(object):
         # f.options = **options
         self.handlers = {}
 
+    @property
+    def name(self):
+        return self.__class__.__name__.lower()
+
     def command(self, rule, **options):
         def handler(f):
             return f
@@ -28,7 +32,7 @@ class Parser(object):
         return False
 
     def parse(self, line, **options):
-        # parsed, args, kwargs
+        # cmd/parsed, args, kwargs
         return (False, (), {})
 
     def no_args(self, func):
@@ -79,13 +83,14 @@ class Regex(Parser):
         Returns (matches, args, kwargs) - it's up to the caller to apply these
         and test whether f.options["inject"]/f.no_args is set, etc.
         """
+        cmd, _args, _kwargs = self.parse(line)
         if args is None:
-            args = ()
+            args = _args
         if kwargs is None:
-            kwargs = {}
+            kwargs = _kwargs
         matches = []
         for regex, funcs in self.handlers.items():
-            if not regex.findall(line):
+            if not regex.findall(cmd):
                 continue
             if not multiple:
                 return ((funcs[0], args, kwargs)
@@ -107,7 +112,8 @@ class Regex(Parser):
 
     def parse(self, line, **options):
         """\
-        Parse a line and return (parsed, args, kwargs)
+        Parse a line and return (cmd, args, kwargs) - cmd may be False
+        if it wasn't parseable.
 
         Relatively simple in the Regex parser - anything can be "parsed",
         but is not guaranteed to match.
@@ -117,7 +123,7 @@ class Regex(Parser):
             return (False, (), {})
         split = line.split()
         cmd, args = split[0], split[1:]
-        return (True, args, {})
+        return (cmd, args, {})
 
     def regexy(self, r):
         if r[0] != "^":
